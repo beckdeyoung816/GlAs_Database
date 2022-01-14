@@ -21,7 +21,7 @@ library(glue)
 ```
 
 ```{r}
-conf <- yaml.load_file('Enhance_config.yaml')
+conf <- yaml.load_file('../Conf/Enhance_config.yaml')
 IP <- conf$Helper_Files$Input_Data
 SS <- conf$Helper_Files$Script_Support
 OP <- conf$Helper_Files$Output

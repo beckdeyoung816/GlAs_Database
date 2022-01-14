@@ -15,7 +15,7 @@ library(glue)
 ```
 
 ```{r Load in Configuration File, warning =F}
-conf <- yaml.load_file('Combine_config.yaml')
+conf <- yaml.load_file('../Conf/Combine_config.yaml')
 IP <- conf$Helper_Files$Input_Data
 SS <- conf$Helper_Files$Script_Support
 DS <- conf$Helper_Files$Data_Support

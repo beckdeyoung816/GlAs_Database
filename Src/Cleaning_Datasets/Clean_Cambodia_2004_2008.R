@@ -2,6 +2,7 @@ library(tidyverse)
 library(readxl)
 
 
+cam_path <- '../Data/Cambodia_2004_2008/'
 
 # Replace all negatives with bdl
 bdl_replace <- function(x) {
@@ -12,7 +13,7 @@ bdl_replace <- function(x) {
 # 2004 
 combine_2004 <- function(){
   
-  path <- "../Data/Cambodia_2004_2008/2004 Kandal/"
+  path <- paste0(cam_path, "2004 Kandal/")
   
   concs <- read_excel(path = paste0(path,"EAWAG_Groundwaters_Kandal_30-11-05 BB.xls"), sheet = "Concs Modified", skip = 3, col_types = "text")
   sites <- read_excel(path = paste0(path,"EAWAG_Groundwaters_Kandal_30-11-05 BB.xls"), sheet = "Sampling Sites Modified", skip = 3, col_types = "text")
@@ -20,14 +21,14 @@ combine_2004 <- function(){
   Kandal_GW_2004 <- full_join(concs, sites) %>% mutate(Study_ID = "Kandal_2004",
                                                        Country = "Cambodia",
                                                        Water_Source = "GW")
-  write_csv(Kandal_GW_2004, paste0(path,"/Kandal_2004.csv", na = ""))
-  write_csv(Kandal_GW_2004, "../Data/Cambodia_2004_2008/Cleaned_Files/Kandal_2004.csv", na = "")
+  write_csv(Kandal_GW_2004, paste0(path,"/Kandal_2004.csv"), na = "")
+  write_csv(Kandal_GW_2004, paste0(cam_path, "Cleaned_Files/Kandal_2004.csv"), na = "")
 }
 
 # 2005
 
 combine_2005 <- function(){
-  path <- "../Data/Cambodia_2004_2008/2005 Hadzima/"
+  path <- paste0(cam_path, "2005 Hadzima/")
   Hadzima_2005 <- read_excel(path = paste0(path,"water_solids_concentrations whole dataset_from jmp.xls"), sheet = "Modified", skip = 1, col_types = "text")
   Hadzima_2005 <- Hadzima_2005[1:39] # Non Solids data
   Hadzima_2005[14:34] <- bdl_replace(type_convert(Hadzima_2005[14:34]))
@@ -38,14 +39,14 @@ combine_2005 <- function(){
                                           Sample_year = "2005")
   
   write_csv(Hadzima_2005, paste0(path,"/Hadzima_2005.csv", na = ""))
-  write_csv(Hadzima_2005, "../Data/Cambodia_2004_2008/Cleaned_Files/Hadzima_2005.csv", na = "")
+  write_csv(Hadzima_2005, paste0(cam_path, "Cleaned_Files/Hadzima_2005.csv"), na = "")
 }
 
 # 2006
 
 combine_icp_group1_2006 <- function(){
   
-  path <- "../Data/Cambodia_2004_2008/2006 August Papacostas/"
+  path <- paste0(cam_path, "2006 August Papacostas/")
   input<- "Input/ICP Group 1.xlsx"
   
   doc <- read_excel(sheet = "DOC Modified",
@@ -71,7 +72,7 @@ combine_icp_group1_2006 <- function(){
 
 combine_icp_group2_2006 <- function(){
   
-  path <- "../Data/Cambodia_2004_2008/2006 August Papacostas/"
+  path <- paste0(cam_path, "2006 August Papacostas/")
   input<- "Input/ICP Group 2.xlsx"
   
   icp <- read_excel(sheet = "ICP group2 Modified",
@@ -95,7 +96,7 @@ combine_2006 <- function(){
   combine_icp_group1_2006()
   combine_icp_group2_2006()
   
-  path <- "../Data/Cambodia_2004_2008/2006 August Papacostas/"
+  path <- paste0(cam_path, "2006 August Papacostas/")
   
   quicksall <- read_excel(sheet = "Modified",
                           path = paste0(path,"Input/Water Composition Quicksall.xlsx"), col_types = "text") %>% 
@@ -114,14 +115,14 @@ combine_2006 <- function(){
                                                               Sample_year = if_else(is.na(Sample_year),"2006", Sample_year))
   
   write_csv(August_Papacostas_2006, paste0(path,"Output/August_Papacostas_2006.csv"), na = "")
-  write_csv(August_Papacostas_2006, "../Data/Cambodia_2004_2008/Cleaned_Files/August_Papacostas_2006.csv", na = "")
+  write_csv(August_Papacostas_2006, paste0(cam_path, "Cleaned_Files/August_Papacostas_2006.csv"), na = "")
   }
 
 # 2007
 
 combine_2007 <- function(){
   
- path <- "../Data/Cambodia_2004_2008/2007 Fall Quicksall/"
+ path <- paste0(cam_path, "2007 Fall Quicksall/")
   
   
  icp <- read_excel(path = paste0(path, "ICP data FINAL DATA TO INCORPORATE.xlsx"), sheet = "Modified",skip = 3, col_types = "text")
@@ -137,13 +138,13 @@ combine_2007 <- function(){
                                                              Water_Source = "GW")
  
  write_csv(quicksall_2007, paste0(path,"Quicksall_2007.csv"), na = "")
- write_csv(quicksall_2007, "../Data/Cambodia_2004_2008/Cleaned_Files/Quicksall_2007.csv", na = "")
+ write_csv(quicksall_2007, paste0(cam_path, "Cleaned_Files/Quicksall_2007.csv"), na = "")
 }
 
 # 2008
 
 combine_2008_fall <- function(){
-  path <- "../Data/Cambodia_2004_2008/2008 Fall Sampling, Hanh/"
+  path <- paste0(cam_path, "2008 Fall Sampling, Hanh/")
   field_sw <- read_excel(path = paste0(path,"Field Data - computer lab 12-25.xls"),
                          sheet = "Surface Modified", skip = 1, col_types = "text") %>% 
     mutate(Sample_date = as.character(Sample_date))
@@ -159,12 +160,12 @@ combine_2008_fall <- function(){
                                                                     Country = "Cambodia",
                                                                     Sample_year = if_else(is.na(Sample_year),"2008", Sample_year))
   write_csv(Hanh_Fall_2008, paste0(path,"Hanh_Fall_2008.csv"), na = "")
-  write_csv(Hanh_Fall_2008, "../Data/Cambodia_2004_2008/Cleaned_Files/Hanh_Fall_2008.csv", na = "")
+  write_csv(Hanh_Fall_2008, paste0(cam_path, "Cleaned_Files/Hanh_Fall_2008.csv"), na = "")
 }
 
 combine_2008_spring <- function(){
   
-  path <- "../Data/Cambodia_2004_2008/2008 Spring sampling data Eli/"
+  path <- paste0(cam_path, "2008 Spring sampling data Eli/")
   input <- "tracemetals_april_complete_with means_May13.xlsx"
   sheets <- c("groundwater Modified", "open Modified", "surface Modified")
   
@@ -182,7 +183,7 @@ combine_2008_spring <- function(){
   
   Eli_Spring_2008[5:20] <- bdl_replace(type_convert(Eli_Spring_2008[5:20]))
   write_csv(Eli_Spring_2008, paste0(path,"Eli_Spring_2008.csv"), na = "")
-  write_csv(Eli_Spring_2008, "../Data/Cambodia_2004_2008/Cleaned_Files/Eli_Spring_2008.csv", na = "")
+  write_csv(Eli_Spring_2008, paste0(cam_path, "Cleaned_Files/Eli_Spring_2008.csv"), na = "")
 }
 
 
@@ -197,7 +198,7 @@ combine_all <- function()
   combine_2008_fall()
   combine_2008_spring()
   
-  path <- "../Data/Cambodia_2004_2008/Cleaned_Files/"
+  path <- paste0(cam_path, "Cleaned_Files/")
   
   files <- c("Kandal_2004",
              "Hadzima_2005",
