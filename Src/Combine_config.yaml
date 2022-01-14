@@ -1,0 +1,33 @@
+Smudge: 'Smudged' # Either 'Smudged' or 'Precise'
+Helper_Files:
+  Input_Data:
+    loc: '../Data'
+  Script_Support:
+    loc: 'Script_Support_Files'
+    Helper_Functions: 
+      loc: 'GlAs_Helper_Functions.R'
+  Data_Support:
+    loc: '../Data_Support_Files'
+    Dataset_List: 
+      loc: 'Dataset_list.xlsx'
+    Detection_Limits: 
+      loc: 'Conversions_and_Limits.xlsx'
+      sheet: "Provided_Limits"
+    Conversions:
+      loc: "Conversions_and_Limits.xlsx"
+      sheet:  "Conversions"
+  Output: 
+    loc: '../Output'
+    Gathered:
+      loc: 'Full_Data_Gathered_{Sys.Date()}_{conf$Smudge}.csv' 
+Harmonization:
+  NH3__mM: ["NH3__mM",
+            "NH3_N__mM"]
+  NH4__mM: ["NH4__mM",
+            "NH4_N__mM"]
+  NO2__mM: ["NO2__mM",
+            "NO2_N__mM"]
+  NO3__mM: ["NO3__mM",
+            "NO3_N__mM"]
+  PO4__mM: ["PO4__mM",
+            "PO4_P__mM"]

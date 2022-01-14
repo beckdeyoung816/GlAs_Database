@@ -1,0 +1,253 @@
+---
+output: html_document
+---
+
+## Load in packages 
+
+```{r warning=F, message= F}
+
+total_time <- proc.time()
+
+library(tidyverse)
+library(data.table)
+library(PeriodicTable)
+#library(phreeqc)
+#library(easyphreeqc)
+library(sf)
+library(raster)
+library(spData)
+library(yaml)
+library(glue)
+```
+
+```{r}
+conf <- yaml.load_file('Enhance_config.yaml')
+IP <- conf$Helper_Files$Input_Data
+SS <- conf$Helper_Files$Script_Support
+OP <- conf$Helper_Files$Output
+```
+
+```{r Load in Helper Functions}
+make_path2 <- function(dir, file, add_date = F, add_smudge = F){
+  # Make a filepath from a directory and desired filename
+  # @dir: Config list of overall folder where desired file is (e.g. Script_Support)
+  # @file: Desired file as string as it is named in the config file
+  # @add_dateL: whether or not to add a date to the path
+  # @add_smudge: whether or not to add the smudge to the path
+  
+  filename <- dir[[file]] %>% .[['loc']]
+  
+  if (add_date) { 
+    date <- dir[[file]] %>% .[['date']]
+    type <- dir[[file]] %>% .[['type']]
+    
+    if (date == 'TODAY') date = Sys.Date()
+    
+    output <- '{dir$loc}/{filename}_{date}{type}'
+    
+  } else output <- '{dir$loc}/{filename}'
+  
+  # Add the Smudged or Precise to filepath name if desired 
+  if (add_smudge) type <- glue('_{conf$Smudge}{type}')
+
+  output %>% glue()
+}
+
+source(make_path2(SS, 'Helper_Functions')) # Source Helper Functions
+```
+
+
+## Load in compiled groundwater chemistry data 
+```{r dataset version}
+ptm <- proc.time()
+
+full_data_gathered <- fread(make_path2(IP, 'Gathered', add_date = T, add_smudge = T),
+                            data.table = FALSE,
+                            colClasses = "character")
+
+proc.time() - ptm
+```
+
+```{r spread data into tidy wide format}
+gw_data_spread <- full_data_gathered %>% 
+  spread(key = Parameter, 
+         value = Value, 
+         convert = TRUE)%>% 
+  mutate(Lat = as.numeric(Lat),
+         Long = as.numeric(Long))
+```
+
+
+## Compute additional variables/parameters
+
+### Get water table depths and water occurrence depths
+Water table depth data was obtained from Fan et al. 2013.  The script `create_watertable_depth_raster.Rmd` generates a raster from the Fan et al. 2013 data.  This raster is loaded in in the section below and the water table depth for each of our samples is extracted from the raster based on the samples Lat/Long.  The raster data is at 30-arc second resolution (~ 1km by 1km)
+
+The script `create_water_occurrence_raster.Rmd` generates a raster from the Pekel et al. 2016 data.  This raster is loaded in in the section below and the values (percent of the time that water occurred in that pixel).  for each of our samples is extracted from the raster based on the samples Lat/Long.  The raster data is at 500 m resolution (see readme in `Powell_Project\Data\Pekel_2016` for detail of pre-processing done in Google Earth Engine).
+
+
+```{r load in rasters}
+watertable_depth_global <- make_path2(SS, 'GM_hires') %>% raster()
+
+water_occurrence_merged_raster <- make_path2(SS, 'Water_Occurrence') %>% raster()
+```
+
+```{r create data frame with coordinates for each sample site}
+gw_coords_df <- gw_data_spread %>% 
+  dplyr::select("Sample_ID","Study_ID","Lat","Long") %>% 
+  filter(!is.na(Lat), !is.na(Long))
+```
+
+```{r create spatial object containing the sample site coordinates}
+gw_coords <- st_as_sf(gw_coords_df, coords = c("Long", "Lat"), na.fail = F, 
+                 crs = crs(watertable_depth_global, asText = TRUE))
+```
+
+```{r extract from water table depth raster the wtd for each sample}
+t_start <- proc.time()
+
+Watertable_depth__m <- raster::extract(watertable_depth_global, gw_coords) 
+Watertable_depth__m <- as.data.frame(Watertable_depth__m)
+
+Water_occurrence__percent <- extract(water_occurrence_merged_raster, gw_coords)
+Water_occurrence__percent <- as.data.frame(Water_occurrence__percent)
+
+proc.time() - t_start
+```
+
+```{r bind coordinates to depth data}
+wt_depths_water_occur_df <- bind_cols(gw_coords_df, 
+                                      Watertable_depth__m, 
+                                      Water_occurrence__percent) %>% 
+  dplyr::select(-c("Lat", "Long"))
+```
+
+```{r join the water table depth data to the gw_data_spread data frame}
+gw_data_spread <- left_join(gw_data_spread, wt_depths_water_occur_df, by = c("Sample_ID", "Study_ID"))
+```
+
+```{r remove datasets that are no longer needed}
+rm(watertable_depth_global, Watertable_depth__m, Water_occurrence__percent, wt_depths_water_occur_df, gw_coords, gw_coords_df)
+```
+
+
+### Calculate pe for Eh and vice-versa
+```{r}
+gw_data_spread <- gw_data_spread %>%  
+  get_pe_Eh()
+```
+
+
+### Determine Iron speciation
+```{r}
+gw_data_spread <- gw_data_spread %>% 
+  get_Fe_speciation()
+```
+
+
+### Determine dominant redox process 
+```{r}
+gw_data_spread <- gw_data_spread %>% 
+  get_redox_process()
+
+gw_data_spread <- gw_data_spread %>% 
+  mutate(Redox_process = factor(Redox_process, ordered = TRUE,
+                                levels = c("O2 reduction",
+                                           "Suboxic",
+                                           "NO3 reduction",
+                                           "Mn reduction",
+                                           "Fe/SO4 reduction",
+                                           "Methanogenesis",
+                                           "Mixed") ))
+
+```
+
+
+#### Select only samples that have required data for running phreeqC
+```{r get data with values for required phreeqc inputs}
+gw_data_phreeqc_select <- gw_data_spread %>% 
+  filter_at(vars(pH, HCO3__mM, Fe__mM, Mn__mM, Ca__mM, K__mM, Si__mM, Mg__mM, SO4__mM),
+            all_vars(!is.na(.)))
+```
+
+
+#### Define phreeqC output selections
+```{r}
+phreeqc <- conf$Phreeqc # Get outputs from config file
+si_output_list <- phreeqc$si
+molalities_output_list <- phreeqc$molalities
+totals_output_list <- phreeqc$totals
+```
+
+#### Run phreeqC for each sample
+
+```{r run phreeqC for each sample}
+a <- proc.time()
+
+all_phreeqC_output <- get_phreeqC_output(gw_data_phreeqc_select)
+
+proc.time() - a
+```
+
+#### Join phreeqC modeled output to the complete geochemistry dataset 
+```{r}
+all_phreeqC_output <- all_phreeqC_output %>%
+  dplyr::select(-c("sim", "state", "soln", "dist_x", "pH", "pe", "time", "step"))
+
+gw_data_spread <- left_join(gw_data_spread, all_phreeqC_output, by = c("Sample_ID", "Study_ID"))
+```
+
+
+
+### Join tectonic setting to complete geochemistry dataset
+IMPORTANT NOTE: When new samples are added to the dataset (i.e. when we rerun **Create_Combined_Dataset.Rmd**) we need to then rerun the **Get_Basin_Tectonic_Setting.R** script to obtain the tectonic setting for the new sites. This can be done by uncommenting the second line of the next code chunk.  
+
+
+```{r}
+gw_data_spread %>% write_rds(make_path2(OP, 'Spread_for_Tectonic', add_date = T))
+
+# Uncomment the next line to generate the tectonic settings
+# Normally the commandArgs would be supplied in the terminal, 
+# but running it from this script makes things a little messier
+# They are just inputs to the script so it knows where files are
+
+# commandArgs <- function(...) list(Sys.Dat(), OP$loc, SS$loc)
+# source(make_path2(SS, 'Get_Tectonics'))
+
+```
+
+
+```{r load in the tectonic setting for each site}
+tectonic_setting <- readRDS(make_path2(IP, 'Tectonic_Setting', add_date = T))
+```
+
+
+```{r}
+tectonic_setting <- tibble(Study_ID = tectonic_setting$Study_ID,
+                           Sample_ID = tectonic_setting$Sample_ID,
+                           Tectonic_type = tectonic_setting$Type,
+                           Tectonic_structure = tectonic_setting$Structure,
+                           Tectonic_subclass = tectonic_setting$SubClass,
+                           Tectonic_mainclass = tectonic_setting$MainClass) 
+
+tectonic_setting <- tectonic_setting[!duplicated(tectonic_setting$Sample_ID), ] 
+
+GlAs_Database <- gw_data_spread %>% left_join(tectonic_setting)
+```
+
+
+### Save database containing measured and computed values
+```{r}
+GlAs_Database %>% save(file = make_path2(OP, "GlAs_RData", add_date = T, add_smudge = F)) 
+GlAs_Database %>% write_csv(make_path2(OP, "GlAs_csv", add_date = T, add_smudge = F), na="")
+
+proc.time() - total_time
+```
+
+```{r}
+rm(list = ls()[ls() != 'GlAs_Database'])
+```
+
+
+***
+File run by `r Sys.info()[7]` on `r Sys.time()`

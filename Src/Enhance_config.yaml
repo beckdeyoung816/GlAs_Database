@@ -1,0 +1,60 @@
+Smudge: 'Smudged' # Either 'Smudged' or 'Precise'
+Helper_Files:
+  Input_Data:
+    loc: '../Output' # Location of Input_Data Folder
+    Gathered:
+      loc: 'Full_Data_Gathered' # Location of file relative to Input_Data folder
+      date: '2022-01-11' # Most recent date Create_Combined_Dataset.RMD was ran
+      type: '.csv'
+    Tectonic_Setting:
+      loc: 'tectonic_setting'
+      date: "2021-03-18" # Most recent date Get_Basin_Technology_Setting.R was ran
+      type: '.rds'
+  Script_Support:
+    loc: 'Script_Support_Files'
+    Helper_Functions: 
+      loc: 'GlAs_Helper_Functions.R'
+    GM_hires: 
+      loc: 'Global_model_hires_wtd.tif'
+    Water_Occurrence:
+      loc: 'water_occurrence_merged_raster.tif'
+    Get_Tectonics:
+      loc: "Get_Basin_Technology_Setting.R"
+  Output: 
+    loc: '../Output'
+    Spread_for_Tectonic: 
+      loc: 'gw_data_spread' 
+      date: 'TODAY'
+      type: '.rds'
+    GlAs_RData:
+      loc: 'GlAs_Database'
+      date: 'TODAY'
+      type: '.RData'
+    GlAs_csv:
+      loc: 'GlAs_Database'
+      date: 'TODAY'
+      type: '.csv'
+      
+Phreeqc: 
+  # Inputs for the phreeqc section of the script
+  si: ['anhydrite', 
+       'aragonite',
+       'calcite',
+       'chalcedony',
+       'dolomite',
+       'Fe(OH)3(a)',
+       'goethite',
+       'CO2(g)',
+       'gypsum',
+       'hausmannite',
+       'hematite',
+       'manganite',
+       'pyrochroite',
+       'pyrolusite',
+       'quartz',
+       'rhodochrosite',
+       'siderite',
+       'SiO2(a)']
+  molalities: ['CO2','Fe+2','Fe+3']
+  totals: ['Fe(2)', 'Fe(3)']
+      

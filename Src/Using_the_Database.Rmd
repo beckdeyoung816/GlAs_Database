@@ -1,0 +1,166 @@
+---
+title: "Using the Database"
+output: html_document
+---
+
+# How to Use the Powell Database
+
+```{r message=F,warning=F}
+# Loading in data
+library(data.table)
+library(readxl)
+library(glue)
+
+# Manipulating data
+library(tidyverse)
+
+# Conversion
+library(PeriodicTable) 
+
+# Mapping
+library(leaflet) 
+library(leafgl)
+```
+
+
+## Loading in the Data
+```{r message=F}
+recentRunDate <- "2021-07-14"
+
+# Due to the sparsity of the data, the data will assume many of the columns are "logical" because the first 5,000 rows will be blank. Then every observation in that column will be incorrectly assigned NA. So we first load all columns in as character columns and then convert them to numeric if necessary.
+
+GlAs_database <- glue("../Output/GlAs_Database_{recentRunDate}.csv") %>% 
+  data.table::fread(colClasses = 'character', data.table = FALSE) %>% type_convert()
+```
+
+## Handy Functions
+
+```{r}
+# This function will select only the columns with data. If you filter the database at any point, it is useful it to pipe to this function to remove blank columns.
+
+select_cols <- function(df) df[,colSums(is.na(df))<nrow(df)]
+```
+
+```{r}
+# These functions will facilitate conversion out of millimolar
+
+Convert_From_mM <- function(dataIn, parameters, units){
+  # This function can handle single variable conversion or multiple variable conversion
+  
+  # Ignore variables not in millimolar
+  units <- units[str_detect(parameters, "__mM")]
+  parameters <- parameters[str_detect(parameters, "__mM")]
+  
+  # These conversions only work for variables in mM, so we ignore if no variables are
+  if (is_empty(parameters)) return(dataIn)
+    
+  conversionData <- read_excel("../Data_Support_Files/Conversions_and_Limits.xlsx",
+                               sheet = "Conversions")
+  
+  # Create new names for variables
+  nn <- data.frame(par = parameters, unit = units) %>% 
+    mutate(new_names = glue('{str_remove(par, "__mM")}__{units}'))
+  
+  get_molar_mass <- function(parameter){
+    # Get the harmonized version of the chemical
+    harmonizedParameter <- conversionData[str_remove(parameter, "__mM") == conversionData$Parameter,2] %>% as.character() 
+    
+    # Get molar mass
+    harmonizedParameter %>% strsplit(split = ',') %>% unlist %>% mass %>% sum
+  }
+  
+    dataIn %>% 
+      dplyr::mutate(across(all_of(parameters), 
+                    .fns= ~ case_when(nn$unit[nn$par == cur_column()] %in% c('ppm',"mgL") ~
+                                        (. * get_molar_mass(cur_column())),
+                                      
+                                      nn$unit[nn$par == cur_column()] %in% c('ppb',"ugL") ~
+                                        (. * get_molar_mass(cur_column()) * 1e3),
+                                      
+                                      nn$unit[nn$par == cur_column()] %in% c('ppt',"gL") ~
+                                        (. * get_molar_mass(cur_column()) * 1e-3)),
+                    .names = '{nn$new_names[nn$par == col]}'))
+}
+```
+
+## Function Examples
+
+```{r}
+# First we will filter for only samples in the United States and select only the columns with data
+
+usa <- GlAs_database %>%
+  filter(Country == "USA") %>%
+  select_cols() # Over 100 blank columns are quickly removed
+```
+
+
+```{r warning=F, message=FALSE}
+# Next we wil convert a single column to milligrams per liter
+
+usa_mgL <- usa %>% Convert_From_mM("As__mM", "mgL")
+head(usa$As__mM)
+head(usa_mgL$As__mgL)
+```
+
+```{r}
+# Converting multiple columns is easy as well
+# Notice how pH is not in millimolar and thus it is ignored
+# Also not that Mn is still converted to gL with the ignoring of pH
+# Make sure variables to convert are in mM for desired results
+
+usa_converted <- usa %>% 
+  Convert_From_mM(c("As__mM", "Fe__mM", 'pH', "Mn__mM"), c("ugL", "mgL", 'ugL', "gL"))
+
+head(usa[,c("As__mM", "Fe__mM", 'pH', "Mn__mM")])
+head(usa_converted[,c("As__ugL", "Fe__mgL", 'pH', "Mn__gL")])
+```
+
+```{r}
+# Here is a way to convert all columns to a single unit
+
+cols_in_mM <- dplyr::select(GlAs_database, ends_with("__mM")) %>% names()
+
+GlAs_converted <- GlAs_database %>% 
+  Convert_From_mM(cols_in_mM, rep("ugL", length(cols_in_mM)))
+```
+
+## Plot Something
+
+```{r warning=F}
+options(scipen = 999) # Remove scientific notation
+
+GlAs_converted %>% filter(Country == 'Cambodia') %>% 
+  ggplot(aes(x = As__ugL, fill = LocDiv_Province)) + 
+  geom_density(na.rm = T, alpha = .5) + scale_x_log10() + theme_classic() +
+  labs(title = 'Distribution of arsenic in Cambodia by Province',
+       x = 'As (ugL)',
+       y = 'Density')
+```
+
+## Map something
+
+```{r }
+usa_sf <- usa_converted %>% 
+  dplyr::select(Lat, Long, As__ugL, Depth__m) %>% 
+  dplyr::mutate(As__ugL = round(As__ugL, 1),
+                Info_string = paste("Depth (m) = ", round(Depth__m, 1),
+                               "; As (ug/L) = ", As__ugL, sep = "") ) %>% 
+  drop_na() %>% 
+  st_as_sf(coords = c("Long","Lat"), crs = 4326) 
+
+cols <- colorNumeric(viridis::viridis_pal(option = "C")(2), domain = 0:2500)
+
+leaflet(usa_sf) %>% 
+    addProviderTiles(providers$Esri.NatGeoWorldMap, group = "Map") %>%
+    addProviderTiles(providers$Esri.WorldImagery, group = "Satellite") %>%
+    leaflet::addCircleMarkers( 
+                group = "Locations",
+                color =  cols(usa_sf$As__ugL), # I CAN NEVER FIGURE OUT HOW TO ADD COLORS PROPERLY!!
+                popup = "As__ugL") %>% 
+    addLayersControl(baseGroups = c("Map", "Satellite"),
+                     overlayGroups = "Locations"
+    )
+```
+
+
+

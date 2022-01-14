@@ -1,0 +1,429 @@
+---
+output: html_document
+---
+
+```{r Packages to Install, message=F, warning=F}
+library(tidyverse)
+library(tidyfast)
+library(readxl)
+library(stringr)
+library(PeriodicTable)
+library(list)
+library(purrr)
+library(yaml)
+library(glue)
+```
+
+```{r Load in Configuration File, warning =F}
+conf <- yaml.load_file('Combine_config.yaml')
+IP <- conf$Helper_Files$Input_Data
+SS <- conf$Helper_Files$Script_Support
+DS <- conf$Helper_Files$Data_Support
+OP <- conf$Helper_Files$Output
+```
+
+```{r Load in Helper Functions}
+make_path <- function(dir, filename, dataset = F){
+  # Make a filepath from a directory and desired filename
+  # @dir: Config list of overall folder where desired file is (e.g. Data_Support)
+  # @filename: Desired file as string as it is named in the config file or name of input dataset
+  # dataset: True or False for if the string filename is an input dataset and should not be taken from the config
+  if (!dataset) filename = dir[[filename]] %>% .[['loc']]
+  
+  #paste0(dir$loc, "_", filename)
+  
+  glue('{dir$loc}/{glue(filename)}')
+}
+
+source(make_path(SS, 'Helper_Functions')) # Source Helper Functions
+```
+
+```{r Loading in Data, warning=FALSE, message=F}
+dataset_list <- make_path(DS, 'Dataset_List') %>% read_excel() # List of Datasets
+
+ptm <- proc.time()
+# Load all the data into a single dataframe
+all_data <- pmap_df(dataset_list, load_and_clean_data, IP, conf$Smudge) 
+proc.time() - ptm
+```
+
+```{r Create Unit Column, warning=F}
+
+# Create a unit column by separating the units from the parameters
+
+all_data_sep <- all_data %>% 
+  tidyfast::dt_separate(Parameter, sep = "__", into = c('Parameter','Unit'), immutable = T, remove = F) %>% as.data.frame()
+```
+
+## Clearing up the flags
+
+```{r Create Flag Column}
+
+# Create a column that says if there is a flag or not
+# We are considering all values with some version of 'bdl' as having a '<' flag
+
+all_data_flag <- all_data_sep %>% 
+  dplyr::mutate(Flag = case_when(is.na(Unit) ~ "None", # Some parameters such as "Notes" sometimes have < or > in them, so we need to account for that
+                            str_detect(Value, '<') ~ '<',
+                            str_detect(Value, '>') ~ '>',
+                            str_detect(Value, '＜') ~ '<',
+                            str_detect(str_to_lower(Value), 'bdl') ~ '<',
+                            TRUE ~ 'None'))
+```
+
+```{r Create Separate Dataset with only Flags}
+
+# Create a new dataset with only flagged values to make it easier to remove these flags
+# We remove the flags and spaces so there are only numbers and versions of 'bdl' left in the value column
+
+only_flags <- all_data_flag %>% 
+  filter(Flag %in% c('<', '>')) %>% 
+  mutate(Value = str_replace_all(Value, "<", "")) %>% 
+  mutate(Value = str_replace_all(Value, " ", "")) %>% 
+  mutate(Value = str_replace_all(Value, ">", "")) %>% 
+  mutate(Value = str_replace_all(Value, "＜", "")) 
+```
+
+```{r Save Values Listed Below Detection Limit, warning=F}
+
+# Save the values that are listed as below detection limit, some of these will have reported detection limits reported in the study that we can use to fill these values
+
+DL <- only_flags %>% 
+  filter(str_to_lower(Value) %in% c("dl", "bdl")) %>% 
+  dplyr::select(-Flag)
+```
+
+
+
+## Convert values to numeric for nonflagged values
+
+
+
+```{r Dataset Without Flags, warning=F}
+
+# Create another dataset with only the non flagged values which we will later join back together with the flagged dataset after we remove and account for these flags
+
+no_flags <- all_data_flag %>% 
+  filter(Flag == 'None') %>% dplyr::select(-Flag)
+```
+
+
+
+# Fixing Values Below Detection Limits
+
+
+
+```{r Import Dataset With Detection Limits, warning=F}
+
+# Load in spreadsheet that contains detection limits by study by parameter when available
+det_limits <- make_path(DS, "Detection_Limits") %>% read_excel(sheet = DS$Detection_Limits$sheet)
+```
+
+```{r Substitute in Corect Detection Limits, message = F}
+only_flags <- left_join(only_flags, det_limits) %>% # Add detection limits to dataframe
+  # If the detection limit is avalilable and Value is a form of bdl, then replace it with the detection limit
+  mutate(Value = if_else(!is.na(Detection_Limit) & str_to_lower(Value) %in% c('dl', "bdl"), 
+                         Detection_Limit %>% as.character(), Value)) %>% 
+  dplyr::select(-Detection_Limit)
+```
+
+```{r Estimate Detection Limits}
+
+# 'factor' is the value which we are using to estimate the values for the flags
+
+factor <- 2
+
+# Convert to numeric and divide or multiple by 'factor' to give rough estimates
+
+only_flags <- only_flags %>% 
+  
+  filter(str_to_lower(Value) != "dl" & str_to_lower(Value) != "bdl") %>% 
+  mutate("Value" = case_when(Flag == "<" ~ (as.numeric(Value)) / factor, 
+                             Flag == ">" ~ as.numeric(Value) * factor)) %>% 
+  dplyr::select(-Flag)
+
+# Values will only occur in check1 when the Value column in the only_flags dataset contains a non numeric value
+
+check1 <- only_flags %>% filter(is.na(Value)) 
+
+rm(factor)
+```
+
+```{r Recombine Entire Dataset With Fixed Flags}
+
+# Make Value column of only_flags back into string so that we can bind to no_flags
+# After this bind, we have the full dataset back together, but with all flags removed and accounted for
+
+only_flags <- only_flags %>% 
+  mutate("Value" = as.character(Value))
+
+all_data <- bind_rows(no_flags, only_flags)
+
+rm(all_data_sep, all_data_flag, only_flags, no_flags, dataset_list, det_limits)
+```
+
+```{r Remove Odd NAs}
+
+# Remove weird instances of datasets listing their NA's
+
+# No_data contains all values that do not have data, but are listed as a string in their original file
+
+# Here we are creating no_data as its own dataset and then by antijoining it to the full dataset,
+    # all of these weird occurences of versions of 'NA' are removed
+
+no_data <- all_data %>% 
+  filter(str_to_lower(Value) %in% c("na", 
+                                    "ns", 
+                                    "no data",
+                                    "-", 
+                                    " -", 
+                                    "–",
+                                    " –" ,
+                                    "n.d.", 
+                                    "n.m.", 
+                                    "*", 
+                                    "a", 
+                                    "nd", 
+                                    "/", 
+                                    "n.a.",
+                                    "n/d",
+                                    "n/a",
+                                    "b.d.",
+                                    "n",
+                                    "no",
+                                    "?",
+                                    "del",
+                                    "nc",
+                                    "#n/a",
+                                    "nr",
+                                    "--"),
+         !(Parameter %in% c("LocDiv_State") & Value %in% c("NC", "ND")), #Save North Dakota and North Carolina
+         !(str_detect(Parameter,"LocDiv") & str_detect(Value, "N")), # Save LocDiv values as they are not missing
+         !(Parameter == "Smell" & Value == "no")) 
+
+weird_nas_removed <- all_data %>% anti_join(no_data)
+```
+
+```{r Create Dataset with No Units}
+# New dataset with only parameters with no units e.g. pH or Country
+
+no_unit <- weird_nas_removed %>% filter(is.na(Unit))
+```
+
+
+
+# Unit Conversion
+
+
+
+```{r Create Dataset with Units}
+
+# Create dataset with only parameters with units 
+
+unit <- weird_nas_removed[!is.na(weird_nas_removed$Unit),] %>% 
+  filter(str_to_lower(Value) != 'bdl' & str_to_lower(Value) != 'dl') %>%
+
+  # Change all values to numeric (For instance, Country is unitless and not included)
+
+  mutate("Value" = Value %>% str_trim() %>% as.numeric())
+
+
+# check2 only contains values when something in the Value column of weird_nas_removed is not possible to be converted to numeric. This most likely occurs when a new study has a way for saying 'NA' that we have not accounted for. This could also occur when a study has a weird font for negative signs and those should be replaced in excel
+
+check2 <- unit %>% filter(is.na(Value))
+
+rm(weird_nas_removed, no_data, all_data)
+```
+
+
+```{r Import Dataset With Parameters To Convert}
+
+# Dataset with parameters we want to convert and their harmonized names for easy molar mass calculation
+
+conversion_data <- make_path(DS, 'Conversions') %>% read_excel(sheet=DS$Conversions$sheet)
+```
+
+
+## Conversions not into mM
+
+
+```{r Conversions Not into mM}
+
+# Initialize new converted units df
+conv_units <- unit
+
+# TDS does not have a molar mass and should not be converted to mM, but all should be in mgL
+conv_units$Value[conv_units$Parameter == 'TDS' & conv_units$Unit == 'gL'] <- conv_units$Value[conv_units$Parameter == 'TDS' &
+                                                                                                conv_units$Unit == 'gL'] * 1000
+
+# ppm is the same as mgL, so only the label is changed in this case, not the value
+conv_units$Unit[conv_units$Parameter == 'TDS' & (conv_units$Unit %in% c('gL',"ppm"))] <- 'mgL'
+
+# Measurements in mScm should be in uScm
+
+conv_units$Value[conv_units$Unit == 'mScm'] <- conv_units$Value[conv_units$Unit == 'mScm'] * 1000
+conv_units$Unit[conv_units$Unit == 'mScm'] <- 'uScm'
+
+# Convert all feet and inches to meters
+
+conv_units$Value[conv_units$Unit == 'ft'] <- conv_units$Value[conv_units$Unit == 'ft'] * 0.3048
+conv_units$Unit[conv_units$Unit == 'ft'] <- 'm'
+
+conv_units$Value[conv_units$Unit == 'in'] <- conv_units$Value[conv_units$Unit == 'in'] * 0.3048 / 12
+conv_units$Unit[conv_units$Unit == 'in'] <- 'm'
+```
+
+
+## Conversions into mM
+
+
+### Harmonize Parameters to allow for molar mass conversions
+
+
+This needs to be done because chemicals such as HCO3 do not have simple molar masses to calculate in r
+
+```{r Harmonize Paramters}
+conv_units <- conv_units %>% left_join(conversion_data, by = c("Parameter"))
+```
+
+### Get Molar Masses
+
+```{r Calculate Molar Mass}
+# Using the harmonized parameters, we want to split it into multiple different sets of strings
+# This is because we need to take the molar mass of each individual element in the parameter
+# For example, the harmonized parameter of 'N,O,O,O' needs to be split into 'N' 'O' 'O' 'O'
+# The molar mass will be calculated for each element and summed and this value is replaced into the dataset
+
+mm_start <- proc.time()
+
+conv_units <- conv_units %>% 
+   rowwise() %>%
+   mutate(Molar_Mass = if_else(is.na(Harmonized_Params), NA_real_,
+                               Harmonized_Params %>% strsplit(split = ',') %>% 
+                                 unlist() %>% mass() %>% sum()))
+proc.time() - mm_start
+```
+
+```{r Conversions into mM}
+
+conv_start <- proc.time()
+# List of units to convert
+unit_list <- list(c('gL', 'ppt'),  # gL = ppt
+                  c('mgL', 'ppm'), # mgL = ppm
+                  c('ugL', 'ppb'), # ugL = ppb
+                  'M', 'uM', 'nM')
+
+# Apply conversion function to each set of units and store results in single df
+conv_tmp <- map_df(unit_list, convert, conv_units)
+
+conv_units <- conv_units %>% left_join(conv_tmp) %>% 
+  # If we computed a converted value and unit, replace the originals with those value and unit
+  mutate(Value = if_else(is.na(conv_value), Value, conv_value),
+         Unit = if_else(is.na(conv_unit), Unit, conv_unit)) %>% 
+  dplyr::select(-c(conv_value, conv_unit, Molar_Mass, Harmonized_Params))
+
+rm(conv_tmp)
+
+proc.time() - conv_start
+```
+
+
+```{r Conversion Check}
+
+# check3 is used to see if there are any parameters that were not converted to desired units
+# Many of the parameters we do not want to convert and their units are listed below
+
+check3 <-  conv_units %>% filter(Unit != 'mM', 
+                                 Unit != 'C',
+                                 Unit != 'm',
+                                 Unit != 'mV', 
+                                 Unit !='uScm', 
+                                 Unit != 'permil', 
+                                 Unit !='FM', 
+                                 Unit !='TU', 
+                                 Unit !='CFU', 
+                                 Unit !='yrs', 
+                                 Unit !='ratio',
+                                 Unit != 'NTU',
+                                 Unit != 'MPN',
+                                 Parameter != 'Abs_254',
+                                 Parameter != 'K_Na',
+                                 !(Parameter == 'Charge_balance' & Unit == 'percent'),
+                                 !(Parameter == 'DO' & Unit == 'percent'),
+                                 !(Parameter == 'Sal' & Unit == 'ppt'),
+                                 !(Parameter == 'TDS' & Unit == 'mgL'))
+```
+
+```{r Recombine Full Dataset With Converted Units}
+
+# We need to change the values into strings so that we can bind it with the no_unit dataset
+
+conv_units <- conv_units %>% mutate(Value = as.character(Value))
+
+full_data_gathered <- bind_rows(conv_units, no_unit)
+
+# Remove all empty data
+full_data_gathered <- full_data_gathered[!is.na(full_data_gathered$Value),]
+```
+
+
+
+# Rejoining Parameters and Units
+
+
+
+```{r Rejoin Parameters}
+
+# Rejoin parameters and units for use as column headers
+
+full_data_gathered <- full_data_gathered %>% 
+  mutate(Parameter = if_else(is.na(Unit), 
+                               Parameter, 
+                               paste(Parameter, Unit, sep = "__"))) %>% 
+  dplyr::select(-Unit)
+```
+
+
+```{r Harmonize Parameters Part 2}
+# Here we harmonize parameters that are equal now that we converted to mM such as NO3 and NO3_N
+
+harm_dict <- conf$Harmonization # Get which parameters to harmonize from the config file
+
+param_groups <- map_df(1:length(harm_dict), create_param_group, harm_dict) # Create a datatable with harmonization info
+
+full_data_gathered <- full_data_gathered %>% left_join(param_groups) %>% # Join data with harmonization table
+  mutate(Parameter = if_else(is.na(Harmonized_Param), Parameter, Harmonized_Param)) %>%  # Select new name if relevant
+  dplyr::select(-Harmonized_Param)
+```
+
+# Write gathered data as a csv
+
+
+
+This csv will be inputted into `Create_Enhanced_Dataset.Rmd` to create a finalized version of the Powell_Groundwater_Database
+
+
+```{r Output Finished Data as CSV}
+
+full_data_gathered %>% write_csv(make_path(OP, 'Gathered'))
+
+print('TOTAL TIME:')
+(proc.time() - ptm )/ 60
+```
+
+```{r Test Spreading}
+# Test to see that spreading works
+
+check4 <- full_data_gathered %>% 
+  spread(key = Parameter, 
+         value = Value, 
+         convert = TRUE)
+```
+
+```{r}
+rm(list = ls()[!ls() %in% c("full_data_gathered") & !str_detect(ls(), "check")])
+```
+
+
+
+
